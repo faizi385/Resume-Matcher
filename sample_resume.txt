@@ -1,0 +1,37 @@
+John Doe
+Senior Python Developer
+
+SUMMARY
+Results-driven Python Developer with 5+ years of experience in developing scalable web applications and APIs. Proficient in Python, Django, and FastAPI with a strong background in database design and cloud technologies.
+
+TECHNICAL SKILLS
+- Programming: Python, JavaScript, SQL
+- Web Frameworks: Django, FastAPI, Flask
+- Databases: PostgreSQL, MongoDB, Redis
+- Cloud: AWS (EC2, S3, Lambda), Docker, Kubernetes
+- Tools: Git, GitHub Actions, Jenkins, JIRA
+
+PROFESSIONAL EXPERIENCE
+
+Senior Python Developer
+Tech Solutions Inc. | 2020 - Present
+- Developed and maintained RESTful APIs using FastAPI and Django REST Framework
+- Designed and optimized database schemas for high-traffic applications
+- Implemented CI/CD pipelines using GitHub Actions and Jenkins
+- Containerized applications using Docker and orchestrated with Kubernetes
+- Mentored junior developers and conducted code reviews
+
+Python Developer
+Web Apps Co. | 2018 - 2020
+- Built and maintained Django-based web applications
+- Integrated third-party APIs and payment gateways
+- Improved application performance by 40% through query optimization
+- Implemented automated testing using pytest
+
+EDUCATION
+BSc in Computer Science
+University of Technology, 2018
+
+CERTIFICATIONS
+- AWS Certified Developer - Associate
+- Docker Certified Associate

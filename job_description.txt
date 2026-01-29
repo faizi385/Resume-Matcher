@@ -1,0 +1,28 @@
+Job Title: Senior Python Developer
+
+We are looking for an experienced Python Developer with expertise in:
+- Python programming (3.7+)
+- Web frameworks like Django and FastAPI
+- Database design and optimization (PostgreSQL, MongoDB)
+- Cloud platforms (AWS, Azure, or GCP)
+- Containerization (Docker, Kubernetes)
+- RESTful API development
+- Test-driven development (TDD)
+- CI/CD pipelines
+- Microservices architecture
+- Git version control
+
+Nice to have:
+- Experience with machine learning
+- Knowledge of data visualization tools
+- Experience with message brokers (RabbitMQ, Kafka)
+- Understanding of DevOps practices
+
+Responsibilities:
+- Develop and maintain Python applications
+- Write clean, maintainable, and efficient code
+- Design and implement low-latency, high-availability applications
+- Integrate user-facing elements with server-side logic
+- Implement security and data protection
+- Performance tuning and optimization
+- Code review and mentoring junior developers
