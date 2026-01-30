@@ -267,8 +267,33 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Display analysis results
     function displayResults(data) {
+        // Check if we have analysis data in the response
+        const analysis = data.analysis || {};
+        const metrics = data.metrics || {};
+        const previews = data.previews || {};
+        const skills = data.skills || {};
+        
+        // Update detailed metrics
+        document.getElementById('tfidfScore').textContent = `${analysis.tfidf_similarity || 0}%`;
+        document.getElementById('keywordSimilarity').textContent = `${analysis.keyword_similarity || 0}%`;
+        
+        // Update skill match metrics
+        const skillMatchPct = analysis.skill_match?.match_percentage || 0;
+        document.getElementById('skillMatch').textContent = `${skillMatchPct}%`;
+        
+        // Update required skills match
+        const requiredSkillsMatched = analysis.skill_match?.required_skills_matched || 0;
+        const totalRequiredSkills = analysis.skill_match?.total_required_skills || 1; // Avoid division by zero
+        const requiredSkillsPct = Math.round((requiredSkillsMatched / totalRequiredSkills) * 100);
+        document.getElementById('requiredSkillsMatch').textContent = 
+            `${requiredSkillsMatched}/${totalRequiredSkills} (${requiredSkillsPct}%)`;
+            
+        // Update action verbs count
+        const actionVerbsCount = analysis.ats_keywords?.action_verbs?.length || 0;
+        document.getElementById('actionVerbsCount').textContent = actionVerbsCount;
+        
         // Update score with animation
-        const score = Math.round(data.score || 0);
+        const score = Math.round(analysis.overall_score || 0);
         const scoreElement = document.getElementById('matchScore');
         const scoreBar = document.getElementById('scoreBar');
         const scoreText = document.getElementById('scoreText');
@@ -324,25 +349,41 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }, 20);
         
-        // Update missing keywords
+        // Update missing skills
         const keywordsContainer = document.getElementById('missingKeywords');
         keywordsContainer.innerHTML = '';
         
-        if (data.missing_keywords && data.missing_keywords.length > 0) {
-            // Take top 15 keywords and remove duplicates
-            const uniqueKeywords = [...new Set(data.missing_keywords)].slice(0, 15);
+        // Get missing skills from the analysis
+        const missingSkills = [];
+        if (analysis.skill_match && analysis.skill_match.missing) {
+            for (const [category, skills] of Object.entries(analysis.skill_match.missing)) {
+                if (skills && skills.length > 0) {
+                    missingSkills.push(...skills.map(skill => ({
+                        name: skill,
+                        category: category.replace('_', ' ').toLowerCase()
+                    })));
+                }
+            }
+        }
+        
+        if (missingSkills.length > 0) {
+            // Take top 15 missing skills
+            const topMissingSkills = missingSkills.slice(0, 15);
             
             // Update keyword count
-            document.getElementById('keywordCount').textContent = uniqueKeywords.length;
+            document.getElementById('keywordCount').textContent = topMissingSkills.length;
             
-            // Add keywords with animation
-            uniqueKeywords.forEach((keyword, index) => {
+            // Add skills with animation
+            topMissingSkills.forEach((skill, index) => {
                 setTimeout(() => {
-                    const keywordEl = document.createElement('span');
-                    keywordEl.className = 'keyword-tag animate__animated animate__fadeInUp';
-                    keywordEl.style.animationDelay = `${index * 0.05}s`;
-                    keywordEl.textContent = keyword;
-                    keywordsContainer.appendChild(keywordEl);
+                    const skillEl = document.createElement('div');
+                    skillEl.className = 'keyword-tag animate__animated animate__fadeInUp flex items-center';
+                    skillEl.style.animationDelay = `${index * 0.05}s`;
+                    skillEl.innerHTML = `
+                        <span class="font-semibold">${skill.name}</span>
+                        <span class="text-xs opacity-75 ml-1">(${skill.category})</span>
+                    `;
+                    keywordsContainer.appendChild(skillEl);
                 }, 50 * index);
             });
             
@@ -353,30 +394,20 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Format and display preview text with syntax highlighting
         const formatPreviewText = (text) => {
-            if (!text) return 'No preview available';
-            // Simple keyword highlighting (would be enhanced with actual syntax highlighting in production)
-            let formattedText = text;
-            if (data.missing_keywords) {
-                data.missing_keywords.forEach(keyword => {
-                    if (keyword.length > 3) { // Only highlight longer keywords
-                        const regex = new RegExp(`(${keyword})`, 'gi');
-                        formattedText = formattedText.replace(regex, '<span class="bg-yellow-100 text-yellow-800 px-1 rounded">$1</span>');
-                    }
-                });
-            }
-            return formattedText.length > 1000 
-                ? formattedText.substring(0, 1000) + '<span class="text-gray-400">... (truncated)</span>' 
-                : formattedText;
+            if (!text) return '<span class="text-gray-500">No preview available</span>';
+            // Simple text formatting
+            return text.length > 1000 
+                ? text.substring(0, 1000) + '<span class="text-gray-400">... (truncated)</span>' 
+                : text;
         };
         
         // Update previews with formatted text
-        document.getElementById('resumePreview').innerHTML = formatPreviewText(data.resume_text || '');
-        document.getElementById('jdPreview').innerHTML = formatPreviewText(data.job_desc_text || '');
+        document.getElementById('resumePreview').innerHTML = formatPreviewText(previews.resume || '');
+        document.getElementById('jdPreview').innerHTML = formatPreviewText(previews.job_description || '');
         
         // Update word counts
-        const countWords = (text) => text ? text.trim().split(/\s+/).length : 0;
-        document.getElementById('resumeWordCount').textContent = countWords(data.resume_text);
-        document.getElementById('jdWordCount').textContent = countWords(data.job_desc_text);
+        document.getElementById('resumeWordCount').textContent = metrics.resume_length || 0;
+        document.getElementById('jdWordCount').textContent = metrics.jd_length || 0;
     }
     
         // Mobile menu functionality

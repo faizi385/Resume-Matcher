@@ -1,12 +1,56 @@
 import re
 import string
 import sys
+import json
+import ssl
+import spacy
 from pathlib import Path
-from typing import List, Tuple, Set
-
+from typing import List, Tuple, Set, Dict, Any
+from collections import Counter
 import PyPDF2
-from sklearn.feature_extraction.text import TfidfVectorizer
+import nltk
+
+# Disable SSL certificate verification for NLTK downloads
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
+
+# Download required NLTK data
+nltk.download('vader_lexicon', quiet=True)
+nltk.download('stopwords', quiet=True)
+
+from nltk.sentiment import SentimentIntensityAnalyzer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+# Load spaCy's English model
+try:
+    nlp = spacy.load('en_core_web_sm')
+except OSError:
+    import subprocess
+    subprocess.run(['python', '-m', 'spacy', 'download', 'en_core_web_sm'])
+    nlp = spacy.load('en_core_web_sm')
+
+# Initialize sentiment analyzer
+sia = SentimentIntensityAnalyzer()
+
+# Common technical skills dictionary (can be expanded)
+TECH_SKILLS = {
+    'programming': ['python', 'java', 'javascript', 'c++', 'c#', 'ruby', 'php', 'swift', 'kotlin', 'go', 'rust', 'typescript'],
+    'web': ['html', 'css', 'react', 'angular', 'vue', 'django', 'flask', 'node.js', 'express', 'spring', 'laravel'],
+    'databases': ['sql', 'mysql', 'postgresql', 'mongodb', 'redis', 'oracle', 'sqlite', 'cassandra'],
+    'devops': ['docker', 'kubernetes', 'aws', 'azure', 'gcp', 'jenkins', 'ansible', 'terraform', 'github actions'],
+    'data_science': ['pandas', 'numpy', 'tensorflow', 'pytorch', 'scikit-learn', 'r', 'matplotlib', 'seaborn']
+}
+
+# ATS keywords (can be expanded based on job categories)
+ATS_KEYWORDS = {
+    'action_verbs': ['managed', 'led', 'developed', 'implemented', 'designed', 'created', 'improved', 'increased', 'reduced', 'optimized'],
+    'soft_skills': ['leadership', 'communication', 'teamwork', 'problem-solving', 'time management', 'adaptability', 'creativity', 'work ethic']
+}
 
 # Common English stopwords
 STOP_WORDS = {
@@ -55,122 +99,239 @@ def read_text_file(file_path: str) -> str:
         print(f"Error reading text file: {e}")
         sys.exit(1)
 
-def preprocess_text(text: str) -> str:
+def extract_skills(text: str) -> Dict[str, List[str]]:
     """
-    Preprocess the input text by:
-    1. Converting to lowercase
-    2. Removing URLs
-    3. Removing punctuation and numbers
-    4. Removing short words and stopwords
+    Extract skills from text using NLP and predefined skill categories.
+    Returns a dictionary of skill categories and their corresponding skills found.
     """
-    # Convert to lowercase
+    doc = nlp(text.lower())
+    
+    # Extract noun chunks and named entities
+    noun_chunks = [chunk.text.lower() for chunk in doc.noun_chunks]
+    named_entities = [ent.text.lower() for ent in doc.ents]
+    
+    # Combine all possible skill indicators
+    all_terms = set(token.text.lower() for token in doc if not token.is_stop and not token.is_punct)
+    all_terms.update(noun_chunks)
+    all_terms.update(named_entities)
+    
+    # Match against skill categories
+    found_skills = {category: [] for category in TECH_SKILLS}
+    
+    for category, skills in TECH_SKILLS.items():
+        for skill in skills:
+            if skill in text.lower():
+                found_skills[category].append(skill)
+    
+    return found_skills
+
+def analyze_sentiment(text: str) -> Dict[str, float]:
+    """
+    Analyze the sentiment of the job description.
+    Returns a dictionary with sentiment scores.
+    """
+    return sia.polarity_scores(text)
+
+def extract_ats_keywords(text: str) -> Dict[str, List[str]]:
+    """
+    Extract ATS-relevant keywords from text.
+    Returns a dictionary of keyword categories and found keywords.
+    """
+    found_keywords = {category: [] for category in ATS_KEYWORDS}
+    
+    for category, keywords in ATS_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword.lower() in text.lower():
+                found_keywords[category].append(keyword)
+    
+    return found_keywords
+
+def preprocess_text(text: str, remove_stopwords: bool = True) -> str:
+    """
+    Enhanced text preprocessing with NLP capabilities.
+    """
+    # Basic cleaning
     text = text.lower()
+    text = re.sub(r'https?://\S+|www\.\S+|\S+@\S+', '', text)  # URLs and emails
+    text = re.sub(r'[^\w\s]', ' ', text)  # Remove punctuation but keep word boundaries
     
-    # Remove URLs and email addresses
-    text = re.sub(r'https?://\S+|www\.\S+|\S+@\S+', '', text)
+    # Tokenize and lemmatize
+    doc = nlp(text)
+    tokens = [token.lemma_ for token in doc if token.text.strip() != '']
     
-    # Remove punctuation
-    text = text.translate(str.maketrans('', '', string.punctuation))
+    # Remove stopwords if needed
+    if remove_stopwords:
+        tokens = [token for token in tokens if token.lower() not in STOP_WORDS and len(token) > 2]
     
-    # Remove standalone numbers and words containing numbers
-    text = re.sub(r'\b\d+\b|\w*\d\w*', '', text)
-    
-    # Tokenize and filter
-    tokens = tokenize_text(text)
-    filtered_tokens = [word for word in tokens if word not in STOP_WORDS and len(word) > 2]
-    
-    return ' '.join(filtered_tokens)
+    return ' '.join(tokens)
 
-def calculate_similarity(resume_text: str, job_description: str) -> Tuple[float, List[str]]:
+def calculate_similarity(resume_text: str, job_description: str) -> Dict[str, Any]:
     """
-    Calculate cosine similarity between resume and job description.
-    Returns similarity score and top missing keywords.
+    Enhanced similarity analysis with multiple metrics.
+    Returns a dictionary with similarity scores and detailed analysis.
     """
-    # Initialize TF-IDF Vectorizer
-    vectorizer = TfidfVectorizer()
+    # Preprocess texts
+    preprocessed_jd = preprocess_text(job_description)
+    preprocessed_resume = preprocess_text(resume_text)
     
-    # Create TF-IDF matrices
-    tfidf_matrix = vectorizer.fit_transform([job_description, resume_text])
+    # 1. TF-IDF based similarity
+    vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words='english')
+    tfidf_matrix = vectorizer.fit_transform([preprocessed_jd, preprocessed_resume])
+    tfidf_similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
     
-    # Calculate cosine similarity
-    similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+    # 2. Count vectorizer for exact keyword matching
+    count_vectorizer = CountVectorizer(ngram_range=(1, 2), stop_words='english')
+    count_matrix = count_vectorizer.fit_transform([preprocessed_jd, preprocessed_resume])
+    count_similarity = cosine_similarity(count_matrix[0:1], count_matrix[1:2])[0][0]
     
-    # Get feature names (words in the vocabulary)
-    feature_names = vectorizer.get_feature_names_out()
+    # 3. Extract and compare skills
+    jd_skills = extract_skills(job_description)
+    resume_skills = extract_skills(resume_text)
     
-    # Get TF-IDF scores for job description
-    job_desc_vector = tfidf_matrix[0]
-    resume_vector = tfidf_matrix[1]
+    # Calculate skill match score
+    matched_skills = {}
+    missing_skills = {}
     
-    # Find important words in job description that are missing or have low score in resume
-    job_desc_scores = job_desc_vector.toarray()[0]
-    resume_scores = resume_vector.toarray()[0]
-    
-    # Get top 10 important words from job description
-    top_indices = job_desc_scores.argsort()[-10:][::-1]
-    
-    # Find missing or low-scoring keywords
-    missing_keywords = []
-    for idx in top_indices:
-        if job_desc_scores[idx] > 0 and (resume_scores[idx] == 0 or resume_scores[idx] < 0.1):
-            missing_keywords.append(feature_names[idx])
-    
-    return similarity * 100, missing_keywords[:5]  # Return top 5 missing keywords
-
-def analyze_resume(resume_path: str, jd_path: str) -> dict:
-    """
-    Analyze a resume against a job description and return the results as a dictionary.
-    
-    Args:
-        resume_path: Path to the resume file (PDF or TXT)
-        jd_path: Path to the job description file (TXT)
+    for category, skills in jd_skills.items():
+        matched = [skill for skill in skills if skill in resume_skills.get(category, [])]
+        missing = [skill for skill in skills if skill not in resume_skills.get(category, [])]
         
-    Returns:
-        dict: Dictionary containing analysis results
+        if matched:
+            matched_skills[category] = matched
+        if missing:
+            missing_skills[category] = missing
+    
+    # 4. Sentiment analysis of job description
+    sentiment = analyze_sentiment(job_description)
+    
+    # 5. ATS keyword analysis
+    ats_keywords = extract_ats_keywords(resume_text)
+    
+    # Calculate ATS score
+    ats_score = calculate_ats_score(ats_keywords)
+    
+    # Calculate overall score (weighted average)
+    overall_score = (tfidf_similarity * 0.4 + 
+                    count_similarity * 0.3 + 
+                    (sum(len(skills) for skills in matched_skills.values()) / 
+                     max(1, sum(len(skills) for skills in jd_skills.values())) * 0.3))
+    
+    return {
+        'overall_score': round(overall_score * 100, 2),  # Convert to percentage
+        'tfidf_similarity': round(tfidf_similarity * 100, 2),
+        'keyword_similarity': round(count_similarity * 100, 2),
+        'skill_match': {
+            'matched': matched_skills,
+            'missing': missing_skills,
+            'match_percentage': round(len([s for skills in matched_skills.values() for s in skills]) / 
+                                 max(1, len([s for skills in jd_skills.values() for s in skills])) * 100, 2)
+        },
+        'sentiment': sentiment,
+        'ats_keywords': ats_keywords,
+        'recommendations': generate_recommendations(matched_skills, missing_skills, ats_keywords)
+    }
+
+def generate_recommendations(matched_skills: Dict[str, List[str]], 
+                          missing_skills: Dict[str, List[str]], 
+                          ats_keywords: Dict[str, List[str]]) -> List[str]:
+    """Generate actionable recommendations based on analysis."""
+    recommendations = []
+    
+    # Skill-based recommendations
+    if missing_skills:
+        for category, skills in missing_skills.items():
+            if skills:
+                recommendations.append(
+                    f"Consider adding experience with {', '.join(skills[:3])} "
+                    f"to better match the job requirements in the {category.replace('_', ' ')} category."
+                )
+    
+    # ATS keyword recommendations
+    missing_action_verbs = [verb for verb in ATS_KEYWORDS['action_verbs'] 
+                          if verb not in ats_keywords.get('action_verbs', [])]
+    
+    if missing_action_verbs:
+        recommendations.append(
+            f"Try starting bullet points with strong action verbs like "
+            f"{', '.join(missing_action_verbs[:3])} to make your resume more impactful."
+        )
+    
+    # General recommendations
+    if not recommendations:
+        recommendations.append("Your resume looks strong! Consider quantifying your achievements "
+                            "with specific metrics to make it even better.")
+    
+    return recommendations
+
+def analyze_resume(resume_path: str, jd_path: str) -> Dict[str, Any]:
+    """
+    Enhanced resume analysis with AI-powered features.
     """
     try:
-        # Read and process resume
+        # Read and process files
         if resume_path.lower().endswith('.pdf'):
             resume_text = extract_text_from_pdf(resume_path)
-            if not resume_text.strip():
-                return {
-                    'error': 'Could not extract text from PDF. The file might be corrupted or password protected.'
-                }
         else:
             resume_text = read_text_file(resume_path)
         
-        # Read and process job description
-        job_desc_text = read_text_file(jd_path)
+        job_description = read_text_file(jd_path)
         
-        # Preprocess texts
-        processed_resume = preprocess_text(resume_text)
-        processed_job_desc = preprocess_text(job_desc_text)
+        # Extract raw text for display
+        resume_preview = ' '.join(resume_text.split()[:100]) + ('...' if len(resume_text.split()) > 100 else '')
+        jd_preview = ' '.join(job_description.split()[:100]) + ('...' if len(job_description.split()) > 100 else '')
         
-        # Calculate similarity and get missing keywords
-        similarity_score, missing_keywords = calculate_similarity(processed_resume, processed_job_desc)
+        # Perform analysis
+        analysis = calculate_similarity(resume_text, job_description)
         
-        # Prepare results
-        result = {
-            'success': True,
-            'score': round(similarity_score, 1),
-            'missing_keywords': missing_keywords[:10],  # Return top 10 missing keywords
-            'resume_text': resume_text[:1000] + '...' if len(resume_text) > 1000 else resume_text,
-            'job_desc_text': job_desc_text[:1000] + '...' if len(job_desc_text) > 1000 else job_desc_text
+        # Extract ATS keywords and calculate score
+        ats_keywords = extract_ats_keywords(resume_text)
+        ats_score = calculate_ats_score(ats_keywords)
+        
+        # Extract skills separately for detailed display
+        resume_skills = extract_skills(resume_text)
+        jd_skills = extract_skills(job_description)
+        
+        # Prepare response
+        return {
+            'analysis': analysis,
+            'metrics': {
+                'resume_length': len(resume_text.split()),
+                'jd_length': len(job_description.split()),
+                'unique_skills': sum(len(skills) for skills in resume_skills.values()),
+                'jd_skills_count': sum(len(skills) for skills in jd_skills.values())
+            },
+            'previews': {
+                'resume': resume_preview,
+                'job_description': jd_preview
+            },
+            'skills': {
+                'resume_skills': resume_skills,
+                'jd_skills': jd_skills
+            },
+            'sentiment': analyze_sentiment(job_description),
+            'ats_compatibility': {
+                'keywords_found': ats_keywords,
+                'score': ats_score
+            }
         }
-        
-        return result
         
     except Exception as e:
         return {
-            'success': False,
-            'error': str(e)
+            'error': str(e),
+            'message': 'An error occurred during analysis.'
         }
+
+def calculate_ats_score(keywords_found: Dict[str, List[str]]) -> float:
+    """Calculate ATS compatibility score based on found keywords."""
+    total_keywords = sum(len(keywords) for keywords in ATS_KEYWORDS.values())
+    found_keywords = sum(len(keywords) for keywords in keywords_found.values())
+    
+    return round((found_keywords / max(1, total_keywords)) * 100, 2)
 
 def main():
     # Check command line arguments
     if len(sys.argv) != 3:
-        print("Usage: python resume_analyzer.py <resume_file> <job_description_file>")
-        print("Supported formats: PDF or TXT for resume, TXT for job description")
+        print("Usage: python resume_analyzer.py <resume_path> <job_description_path>")
         sys.exit(1)
     
     resume_path = sys.argv[1]
@@ -178,33 +339,87 @@ def main():
     
     # Check if files exist
     if not Path(resume_path).exists():
-        print(f"Error: Resume file '{resume_path}' not found.")
+        print(f"Error: Resume file not found at {resume_path}")
         sys.exit(1)
     
     if not Path(jd_path).exists():
-        print(f"Error: Job description file '{jd_path}' not found.")
+        print(f"Error: Job description file not found at {jd_path}")
         sys.exit(1)
     
-    print("\nProcessing resume and job description...")
-    
-    result = analyze_resume(resume_path, jd_path)
-    
-    if not result.get('success', False):
-        print(f"\nAn error occurred: {result.get('error', 'Unknown error')}")
-        print("Please make sure the input files are valid and try again.")
+    try:
+        results = analyze_resume(resume_path, jd_path)
+        
+        if 'error' in results:
+            print(f"Error: {results['error']}")
+            print(f"Message: {results.get('message', 'No additional details')}")
+            sys.exit(1)
+        
+        # Print formatted results
+        print("\n" + "="*50)
+        print("RESUME ANALYSIS REPORT".center(50))
+        print("="*50)
+        
+        # Overall Score
+        print(f"\n{' Overall Match Score: ':{'='}^50}")
+        print(f"\n{results['analysis']['overall_score']}% match with job description\n")
+        
+        # Detailed Scores
+        print(f"\n{' Detailed Analysis ':{'-'}^50}")
+        print(f"TF-IDF Similarity: {results['analysis']['tfidf_similarity']}%")
+        print(f"Keyword Similarity: {results['analysis']['keyword_similarity']}%")
+        print(f"Skill Match: {results['analysis']['skill_match']['match_percentage']}%")
+        
+        # Skills Analysis
+        print(f"\n{' Skills Analysis ':{'-'}^50}")
+        for category, skills in results['analysis']['skill_match']['matched'].items():
+            if skills:  # Only show categories with skills
+                print(f"\n{category.replace('_', ' ').title()}:")
+                print(f"   Matched: {', '.join(skills[:5])}" + 
+                     ("..." if len(skills) > 5 else ""))
+        
+        missing_skills = results['analysis']['skill_match']['missing']
+        if any(skills for skills in missing_skills.values()):
+            print("\nMissing Skills:")
+            for category, skills in missing_skills.items():
+                if skills:
+                    print(f"- {category.replace('_', ' ').title()}: {', '.join(skills[:3])}" + 
+                         ("..." if len(skills) > 3 else ""))
+        
+        # Recommendations
+        print(f"\n{' Recommendations ':{'-'}^50}")
+        for i, rec in enumerate(results['analysis'].get('recommendations', []), 1):
+            print(f"{i}. {rec}")
+        
+        # ATS Compatibility
+        print(f"\n{' ATS Compatibility ':{'-'}^50}")
+        if 'ats_compatibility' in results and 'score' in results['ats_compatibility']:
+            print(f"Score: {results['ats_compatibility']['score']}%")
+            if 'keywords_found' in results['ats_compatibility']:
+                print("\nFound Keywords:")
+                for category, keywords in results['ats_compatibility']['keywords_found'].items():
+                    if keywords:  # Only show categories with found keywords
+                        print(f"- {category.replace('_', ' ').title()}: {', '.join(keywords[:5])}" + 
+                             ("..." if len(keywords) > 5 else ""))
+        else:
+            print("ATS compatibility data not available")
+        
+        # Preview
+        print(f"\n{' Document Previews ':{'-'}^50}")
+        print("\nResume Preview:")
+        print(results['previews']['resume'])
+        
+        print("\nJob Description Preview:")
+        print(results['previews']['job_description'])
+        
+        print("\n" + "="*50 + "\n")
+        
+    except Exception as e:
+        print(f"\n{' ERROR ':{'*'}^50}")
+        print(f"An error occurred: {str(e)}")
+        print("\nPlease ensure you have all required dependencies installed.")
+        print("You may need to run: pip install -r requirements.txt")
+        print("*" * 50 + "\n")
         sys.exit(1)
-    
-    # Display results
-    print("\n" + "="*50)
-    print(f"Resume Match Score: {result['score']}%")
-    
-    if result['missing_keywords']:
-        print("\nTop Missing Keywords:")
-        for i, keyword in enumerate(result['missing_keywords'], 1):
-            print(f"{i}. {keyword}")
-    else:
-        print("\nGreat! Your resume covers all important keywords from the job description.")
-    print("="*50 + "\n")
 
 if __name__ == "__main__":
     main()
